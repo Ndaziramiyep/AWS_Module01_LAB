@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Onward Logistics - repeatable, auditable engineer onboarding.
+  Groups carry AWS managed job policies, permission boundaries cap every
+  engineer, Secrets Manager generates first-login passwords, CloudTrail
+  records every access change. No inline IAM policies.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedPattern: '[a-z0-9-]+'
+  CreateAuditTrail:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: Set to false if the account already has an org/account trail.
+
+Conditions:
+  MakeTrail: !Equals [!Ref CreateAuditTrail, 'true']
+
+Resources:
+
+  # ==========================================================================
+  # 1. PERMISSION BOUNDARIES - the ceilings. Whatever is attached to a user
+  #    or their group later, effective access = (identity policies) AND
+  #    (boundary). Anything outside the boundary can never be granted.
+  # ==========================================================================
+
+  StorageBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub onward-${Environment}-boundary-storage
+      Description: Maximum permissions a storage engineer can ever hold.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: StorageWork
+            Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+          - Sid: SelfServicePassword
+            Effect: Allow
+            Action: [iam:ChangePassword, iam:GetUser]
+            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${!aws:username}'
+          - Sid: ReadPasswordPolicy
+            Effect: Allow
+            Action: iam:GetAccountPasswordPolicy
+            Resource: '*'
+
+  ComputeBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub onward-${Environment}-boundary-compute
+      Description: Maximum permissions a compute engineer can ever hold.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ComputeWork
+            Effect: Allow
+            Action:
+              - 'ec2:*'
+              - 'elasticloadbalancing:*'
+              - 'autoscaling:*'
+              - 'cloudwatch:Describe*'
+              - 'cloudwatch:Get*'
+              - 'cloudwatch:List*'
+            Resource: '*'
+          - Sid: SelfServicePassword
+            Effect: Allow
+            Action: [iam:ChangePassword, iam:GetUser]
+            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${!aws:username}'
+          - Sid: ReadPasswordPolicy
+            Effect: Allow
+            Action: iam:GetAccountPasswordPolicy
+            Resource: '*'
+
+  ObserverBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub onward-${Environment}-boundary-compute-observer
+      Description: >-
+        Hard ceiling for on-call engineers. Read-only compute and storage
+        visibility; creating, starting or terminating compute is explicitly denied.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ObserveCompute
+            Effect: Allow
+            Action:
+              - 'ec2:Describe*'
+              - 'ec2:Get*'
+              - 'elasticloadbalancing:Describe*'
+              - 'autoscaling:Describe*'
+              - 'cloudwatch:Describe*'
+              - 'cloudwatch:Get*'
+              - 'cloudwatch:List*'
+            Resource: '*'
+          - Sid: ObserveStorage
+            Effect: Allow
+            Action:
+              - 's3:Get*'
+              - 's3:List*'
+              - 's3:Describe*'
+            Resource: '*'
+          - Sid: SelfServicePassword
+            Effect: Allow
+            Action: [iam:ChangePassword, iam:GetUser]
+            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${!aws:username}'
+          - Sid: ReadPasswordPolicy
+            Effect: Allow
+            Action: iam:GetAccountPasswordPolicy
+            Resource: '*'
+          # Belt and braces: the allow-list above already blocks these, the
+          # explicit deny documents intent and survives future boundary edits.
+          - Sid: NeverCreateOrTerminateCompute
+            Effect: Deny
+            Action:
+              - ec2:RunInstances
+              - ec2:StartInstances
+              - ec2:TerminateInstances
+              - ec2:CreateFleet
+              - ec2:RequestSpotInstances
+              - ec2:RequestSpotFleet
+              - autoscaling:CreateAutoScalingGroup
+              - autoscaling:UpdateAutoScalingGroup
+              - autoscaling:SetDesiredCapacity
+            Resource: '*'
+          - Sid: NeverTouchOwnBoundary
+            Effect: Deny
+            Action:
+              - iam:DeleteUserPermissionsBoundary
+              - iam:PutUserPermissionsBoundary
+            Resource: '*'
+
+  # ==========================================================================
+  # 2. GROUPS - job functions, built from AWS managed policies only.
+  # ==========================================================================
+
+  StorageEngineersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub onward-${Environment}-storage-engineers
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonS3FullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
+
+  ComputeEngineersGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub onward-${Environment}-compute-engineers
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2FullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
+
+  OnCallObserversGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub onward-${Environment}-oncall-observers
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ReadOnlyAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
+
+  # ==========================================================================
+  # 3. INITIAL CREDENTIALS - generated by Secrets Manager, never typed or
+  #    stored in Git. Delivered to the hire out-of-band by an admin.
+  # ==========================================================================
+
+  S3UserInitialPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub onward/${Environment}/onboarding/s3-user
+      Description: First-login password for s3-user (forced reset on sign-in)
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"s3-user"}'
+        GenerateStringKey: password
+        PasswordLength: 20
+        RequireEachIncludedType: true
+        ExcludeCharacters: '"@/\''`'
+
+  Ec2User1InitialPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub onward/${Environment}/onboarding/ec2-user-1
+      Description: First-login password for ec2-user-1 (forced reset on sign-in)
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"ec2-user-1"}'
+        GenerateStringKey: password
+        PasswordLength: 20
+        RequireEachIncludedType: true
+        ExcludeCharacters: '"@/\''`'
+
+  Ec2User2InitialPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub onward/${Environment}/onboarding/ec2-user-2
+      Description: First-login password for ec2-user-2 (forced reset on sign-in)
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"ec2-user-2"}'
+        GenerateStringKey: password
+        PasswordLength: 20
+        RequireEachIncludedType: true
+        ExcludeCharacters: '"@/\''`'
+
+  # ==========================================================================
+  # 4. USERS - group membership + boundary + forced password reset.
+  # ==========================================================================
+
+  S3User:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: s3-user
+      Groups: [!Ref StorageEngineersGroup]
+      PermissionsBoundary: !Ref StorageBoundary
+      LoginProfile:
+        Password: !Sub '{{resolve:secretsmanager:${S3UserInitialPassword}:SecretString:password}}'
+        PasswordResetRequired: true
+      Tags:
+        - {Key: Role, Value: storage-engineer}
+
+  Ec2User1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ec2-user-1
+      Groups: [!Ref ComputeEngineersGroup]
+      PermissionsBoundary: !Ref ComputeBoundary
+      LoginProfile:
+        Password: !Sub '{{resolve:secretsmanager:${Ec2User1InitialPassword}:SecretString:password}}'
+        PasswordResetRequired: true
+      Tags:
+        - {Key: Role, Value: compute-engineer}
+
+  Ec2User2:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ec2-user-2
+      Groups: [!Ref OnCallObserversGroup]
+      PermissionsBoundary: !Ref ObserverBoundary
+      LoginProfile:
+        Password: !Sub '{{resolve:secretsmanager:${Ec2User2InitialPassword}:SecretString:password}}'
+        PasswordResetRequired: true
+      Tags:
+        - {Key: Role, Value: oncall-observer}
+
+  # ==========================================================================
+  # 5. AUDIT TRAIL - who changed access, and when. IAM is a global service,
+  #    so global service events must be included.
+  # ==========================================================================
+
+  AuditBucket:
+    Type: AWS::S3::Bucket
+    Condition: MakeTrail
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration: {Status: Enabled}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  # Resource-based policy (required by CloudTrail), not an IAM inline policy.
+  AuditBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: MakeTrail
+    Properties:
+      Bucket: !Ref AuditBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CloudTrailAclCheck
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AuditBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/onward-${Environment}-access-audit
+          - Sid: CloudTrailWrite
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${AuditBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/onward-${Environment}-access-audit
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt AuditBucket.Arn
+              - !Sub '${AuditBucket.Arn}/*'
+            Condition:
+              Bool: {aws:SecureTransport: 'false'}
+
+  AuditTrail:
+    Type: AWS::CloudTrail::Trail
+    Condition: MakeTrail
+    DependsOn: AuditBucketPolicy
+    Properties:
+      TrailName: !Sub onward-${Environment}-access-audit
+      S3BucketName: !Ref AuditBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      EnableLogFileValidation: true
+
+Outputs:
+  ConsoleSignInUrl:
+    Value: !Sub https://${AWS::AccountId}.signin.aws.amazon.com/console
+  S3UserSecretArn:
+    Value: !Ref S3UserInitialPassword
+  Ec2User1SecretArn:
+    Value: !Ref Ec2User1InitialPassword
+  Ec2User2SecretArn:
+    Value: !Ref Ec2User2InitialPassword
+  ObserverBoundaryArn:
+    Value: !Ref ObserverBoundary
+  AuditTrailName:
+    Condition: MakeTrail
+    Value: !Ref AuditTrail

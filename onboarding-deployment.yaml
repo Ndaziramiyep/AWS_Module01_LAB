@@ -1,0 +1,8 @@
+template-file-path: templates/onboarding.yaml
+parameters:
+  Environment: prod
+  CreateAuditTrail: 'true'
+tags:
+  Project: secure-onboarding
+  Owner: platform-security
+  ManagedBy: cloudformation-gitsync

@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One-time bootstrap for GitSync: the Git connection, the role GitSync uses to
+  drive CloudFormation, and the service role the onboarding stack deploys with.
+  Deploy once with: aws cloudformation deploy --template-file
+  bootstrap/gitsync-bootstrap.yaml --stack-name onward-gitsync-bootstrap
+  --capabilities CAPABILITY_NAMED_IAM
+  After deploying, the connection is PENDING: finish the GitHub handshake once
+  in Developer Tools > Settings > Connections (AWS requires this step).
+
+Parameters:
+  ProviderType:
+    Type: String
+    Default: GitHub
+    AllowedValues: [GitHub, GitLab, Bitbucket, GitHubEnterpriseServer]
+
+Resources:
+  RepoConnection:
+    Type: AWS::CodeConnections::Connection
+    Properties:
+      ConnectionName: onward-onboarding-repo
+      ProviderType: !Ref ProviderType
+
+  # ---- Role GitSync assumes to create/execute change sets ------------------
+  GitSyncPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: onward-gitsync-sync-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DriveStack
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStacks
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:GetTemplate
+              - cloudformation:ListChangeSets
+              - cloudformation:ListStacks
+              - cloudformation:ValidateTemplate
+            Resource: '*'
+          - Sid: ManagedEventRules
+            Effect: Allow
+            Action: [events:PutRule, events:PutTargets]
+            Resource: '*'
+            Condition:
+              StringEquals:
+                events:ManagedBy: cloudformation.sync.codeconnections.amazonaws.com
+          - Sid: DescribeEventRules
+            Effect: Allow
+            Action: events:DescribeRule
+            Resource: '*'
+          - Sid: PassStackRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt StackDeployRole.Arn
+
+  GitSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: onward-gitsync-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudformation.sync.codeconnections.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [!Ref GitSyncPolicy]
+
+  # ---- Service role CloudFormation uses to build the onboarding resources --
+  StackDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: onward-onboarding-stack-deploy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: BuildOnboardingResources
+            Effect: Allow
+            Action:
+              - 'iam:*'
+              - 'secretsmanager:*'
+              - 's3:*'
+              - 'cloudtrail:*'
+            Resource: '*'
+
+  StackDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: onward-onboarding-stack-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudformation.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns: [!Ref StackDeployPolicy]
+
+Outputs:
+  ConnectionArn:
+    Value: !Ref RepoConnection
+  GitSyncRoleArn:
+    Value: !GetAtt GitSyncRole.Arn
+  StackDeployRoleArn:
+    Value: !GetAtt StackDeployRole.Arn
