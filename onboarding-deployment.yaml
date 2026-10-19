@@ -2,7 +2,12 @@ template-file-path: templates/onboarding.yaml
 parameters:
   Environment: prod
   CreateAuditTrail: 'true'
+  BudgetAlertEmail: patrick.ndaziramiye@amalitech.com
+  MonthlyBudgetUsd: '20'
+  ExternalAuditorAccountId: ''
+  ExternalAuditorExternalId: onward-prod-external-audit
 tags:
-  Project: secure-onboarding
-  Owner: platform-security
+  Project: onward
+  Owner: Patrick Ndaziramiye
+  Environment: prod
   ManagedBy: cloudformation-gitsync

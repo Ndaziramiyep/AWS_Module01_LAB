@@ -3,8 +3,9 @@ Description: >-
   One-time bootstrap for GitSync: the Git connection, the role GitSync uses to
   drive CloudFormation, and the service role the onboarding stack deploys with.
   Deploy once with: aws cloudformation deploy --template-file
-  bootstrap/gitsync-bootstrap.yaml --stack-name onward-gitsync-bootstrap
+  git-sync/connection-and-roles.yaml --stack-name onward-gitsync-bootstrap
   --capabilities CAPABILITY_NAMED_IAM
+  --tags Project=onward "Owner=Patrick Ndaziramiye" Environment=prod
   After deploying, the connection is PENDING: finish the GitHub handshake once
   in Developer Tools > Settings > Connections (AWS requires this step).
 
@@ -86,6 +87,7 @@ Resources:
               - 'secretsmanager:*'
               - 's3:*'
               - 'cloudtrail:*'
+              - 'budgets:*'
             Resource: '*'
 
   StackDeployRole:

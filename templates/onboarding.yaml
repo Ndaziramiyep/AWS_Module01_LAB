@@ -3,7 +3,8 @@ Description: >-
   Onward Logistics - repeatable, auditable engineer onboarding.
   Groups carry AWS managed job policies, permission boundaries cap every
   engineer, Secrets Manager generates first-login passwords, CloudTrail
-  records every access change. No inline IAM policies.
+  records every access change, outside parties get temporary role access
+  only, and a budget makes spend visible from day one. No inline IAM policies.
 
 Parameters:
   Environment:
@@ -15,9 +16,33 @@ Parameters:
     AllowedValues: ['true', 'false']
     Default: 'true'
     Description: Set to false if the account already has an org/account trail.
+  BudgetAlertEmail:
+    Type: String
+    AllowedPattern: '[^@\s]+@[^@\s]+\.[^@\s]+'
+    Description: Who is emailed when spend approaches the monthly budget.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 20
+    MinValue: 1
+    Description: Monthly cost ceiling for this account, in USD.
+  ExternalAuditorAccountId:
+    Type: String
+    Default: ''
+    AllowedPattern: '(\d{12})?'
+    Description: >-
+      AWS account of the outside party (e.g. external auditor). Leave empty to
+      trust this account, so the role can be demonstrated without a partner.
+  ExternalAuditorExternalId:
+    Type: String
+    MinLength: 8
+    Default: onward-prod-external-audit
+    Description: >-
+      External ID the outside party must present (confused-deputy protection).
+      AWS treats this as an identifier, not a secret.
 
 Conditions:
   MakeTrail: !Equals [!Ref CreateAuditTrail, 'true']
+  HasExternalAccount: !Not [!Equals [!Ref ExternalAuditorAccountId, '']]
 
 Resources:
 
@@ -47,6 +72,17 @@ Resources:
             Effect: Allow
             Action: iam:GetAccountPasswordPolicy
             Resource: '*'
+          # s3:* above would otherwise include the audit log bucket. Storage
+          # engineers must never be able to edit or delete audit evidence.
+          - !If
+            - MakeTrail
+            - Sid: NeverTouchAuditEvidence
+              Effect: Deny
+              Action: 's3:*'
+              Resource:
+                - !GetAtt AuditBucket.Arn
+                - !Sub '${AuditBucket.Arn}/*'
+            - !Ref AWS::NoValue
 
   ComputeBoundary:
     Type: AWS::IAM::ManagedPolicy
@@ -80,8 +116,8 @@ Resources:
     Properties:
       ManagedPolicyName: !Sub onward-${Environment}-boundary-compute-observer
       Description: >-
-        Hard ceiling for on-call engineers. Read-only compute and storage
-        visibility; creating, starting or terminating compute is explicitly denied.
+        Hard ceiling for on-call engineers. Read-only compute visibility only;
+        creating, starting or terminating compute is explicitly denied.
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -95,13 +131,6 @@ Resources:
               - 'cloudwatch:Describe*'
               - 'cloudwatch:Get*'
               - 'cloudwatch:List*'
-            Resource: '*'
-          - Sid: ObserveStorage
-            Effect: Allow
-            Action:
-              - 's3:Get*'
-              - 's3:List*'
-              - 's3:Describe*'
             Resource: '*'
           - Sid: SelfServicePassword
             Effect: Allow
@@ -159,7 +188,6 @@ Resources:
       GroupName: !Sub onward-${Environment}-oncall-observers
       ManagedPolicyArns:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ReadOnlyAccess
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess
         - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
 
   # ==========================================================================
@@ -314,6 +342,101 @@ Resources:
       IncludeGlobalServiceEvents: true
       EnableLogFileValidation: true
 
+  # ==========================================================================
+  # 6. OUTSIDE PARTIES - temporary, limited access only. No IAM user, no
+  #    password, no access key: they assume a role and get credentials that
+  #    expire after one hour. The boundary keeps the role read-only even if
+  #    someone attaches a broader policy to it later.
+  # ==========================================================================
+
+  ExternalAuditorBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub onward-${Environment}-boundary-external-auditor
+      Description: Ceiling for outside parties - read configuration and audit history, never data.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReviewConfigurationAndHistory
+            Effect: Allow
+            Action:
+              - 'cloudtrail:Describe*'
+              - 'cloudtrail:Get*'
+              - 'cloudtrail:List*'
+              - cloudtrail:LookupEvents
+              - 'iam:Get*'
+              - 'iam:List*'
+              - iam:GenerateCredentialReport
+              - 'ec2:Describe*'
+              - 'cloudformation:Describe*'
+              - 'cloudformation:List*'
+              - cloudformation:GetTemplate
+              - 's3:GetBucket*'
+              - s3:ListAllMyBuckets
+            Resource: '*'
+          - Sid: NeverReadDataOrSecrets
+            Effect: Deny
+            Action:
+              - 's3:GetObject*'
+              - secretsmanager:GetSecretValue
+            Resource: '*'
+
+  ExternalAuditorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub onward-${Environment}-external-auditor
+      Description: Temporary, read-only access for people outside Onward Logistics.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !If
+                - HasExternalAccount
+                - !Sub 'arn:${AWS::Partition}:iam::${ExternalAuditorAccountId}:root'
+                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalAuditorExternalId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/SecurityAudit
+      PermissionsBoundary: !Ref ExternalAuditorBoundary
+      Tags:
+        - {Key: Role, Value: external-auditor}
+
+  # ==========================================================================
+  # 7. COST VISIBILITY - spend is visible from day one; the owner is emailed
+  #    before the month's budget is used up, not after.
+  # ==========================================================================
+
+  MonthlyCostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub onward-${Environment}-monthly-cost
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail}
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail}
+
 Outputs:
   ConsoleSignInUrl:
     Value: !Sub https://${AWS::AccountId}.signin.aws.amazon.com/console
@@ -325,6 +448,10 @@ Outputs:
     Value: !Ref Ec2User2InitialPassword
   ObserverBoundaryArn:
     Value: !Ref ObserverBoundary
+  ExternalAuditorRoleArn:
+    Value: !GetAtt ExternalAuditorRole.Arn
+  MonthlyBudgetName:
+    Value: !Ref MonthlyCostBudget
   AuditTrailName:
     Condition: MakeTrail
     Value: !Ref AuditTrail
