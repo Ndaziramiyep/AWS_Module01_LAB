@@ -47,6 +47,8 @@ sim "$(user ec2-user-2)" ec2:RunInstances ec2:TerminateInstances ec2:StartInstan
 
 echo "===== 3. Revert the stress test ====="
 revert
+echo "Expect: AdministratorAccess gone from both the group and the user"
+aws iam list-attached-group-policies --group-name "$OBS_GROUP" --output table
 aws iam list-attached-user-policies --user-name ec2-user-2 --output table
 
 echo "===== 4. Who changed access, and when (CloudTrail; IAM events live in us-east-1) ====="

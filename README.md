@@ -74,6 +74,7 @@ flowchart LR
 | `verify-access.sh` | Evidence script for the Head of Security |
 | `evidence/` | Saved output of `verify-access.sh` |
 | `Discovery-Report-Template.md` | Stage 1 discovery report |
+| `Privillages-Architecture.md` | How access is shared between users, groups and permission boundaries, with the access matrix |
 
 ---
 
