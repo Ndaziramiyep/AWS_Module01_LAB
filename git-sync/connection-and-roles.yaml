@@ -73,6 +73,8 @@ Resources:
       ManagedPolicyArns: [!Ref GitSyncPolicy]
 
   # ---- Service role CloudFormation uses to build the onboarding resources --
+  # Must cover every resource type in templates/onboarding.yaml. Add the
+  # service here first if the onboarding template starts using a new one.
   StackDeployPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -102,10 +104,20 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns: [!Ref StackDeployPolicy]
 
+# Pick the two role ARNs below when creating the Git sync stack (README step 3).
+# verify-access.sh section 10 reads these outputs to prove the live onboarding
+# stack is wired to this bootstrap: connection AVAILABLE, Git sync using
+# GitSyncRole, and the stack deploying with StackDeployRole.
 Outputs:
   ConnectionArn:
+    Description: Approve once in Developer Tools > Settings > Connections.
     Value: !Ref RepoConnection
+    Export: {Name: onward-gitsync-connection-arn}
   GitSyncRoleArn:
+    Description: Choose as the Git sync role ("IAM role" under Git sync).
     Value: !GetAtt GitSyncRole.Arn
+    Export: {Name: onward-gitsync-role-arn}
   StackDeployRoleArn:
+    Description: Choose as the stack's service role ("IAM role for stack deployments").
     Value: !GetAtt StackDeployRole.Arn
+    Export: {Name: onward-onboarding-stack-role-arn}

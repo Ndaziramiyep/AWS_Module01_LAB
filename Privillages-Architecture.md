@@ -1,6 +1,6 @@
 # Privileges Architecture: how access is shared between users, groups and boundaries
 
-**Project:** Onward Logistics secure onboarding · **Account:** prod · **Region:** us-east-1
+**Project:** Onward Logistics secure onboarding · **Account:** prod · **Region:** eu-west-1
 **Owner:** Patrick Ndaziramiye · **Source of truth:** [templates/onboarding.yaml](templates/onboarding.yaml)
 
 Each engineer joins one group per job function. The group grants the day-to-day permissions through AWS managed policies. A permission boundary on every identity sets the ceiling, so access can never grow beyond the role, even if someone over-grants later. Outside parties never get a user account; they assume a short-lived role.

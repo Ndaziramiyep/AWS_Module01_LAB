@@ -437,17 +437,49 @@ Resources:
           Subscribers:
             - {SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail}
 
+# verify-access.sh reads these outputs instead of guessing names, so renaming
+# a resource here keeps the evidence script pointed at the right thing.
 Outputs:
+  Environment:
+    Value: !Ref Environment
   ConsoleSignInUrl:
     Value: !Sub https://${AWS::AccountId}.signin.aws.amazon.com/console
+
+  # ---- Users and groups ----------------------------------------------------
+  S3UserName:
+    Value: !Ref S3User
+  Ec2User1Name:
+    Value: !Ref Ec2User1
+  Ec2User2Name:
+    Value: !Ref Ec2User2
+  StorageEngineersGroupName:
+    Value: !Ref StorageEngineersGroup
+  ComputeEngineersGroupName:
+    Value: !Ref ComputeEngineersGroup
+  OnCallObserversGroupName:
+    Value: !Ref OnCallObserversGroup
+
+  # ---- Boundaries ----------------------------------------------------------
+  StorageBoundaryArn:
+    Value: !Ref StorageBoundary
+  ComputeBoundaryArn:
+    Value: !Ref ComputeBoundary
+  ObserverBoundaryArn:
+    Value: !Ref ObserverBoundary
+  ExternalAuditorBoundaryArn:
+    Value: !Ref ExternalAuditorBoundary
+
+  # ---- First-login secrets (ARNs only, never values) -----------------------
   S3UserSecretArn:
     Value: !Ref S3UserInitialPassword
   Ec2User1SecretArn:
     Value: !Ref Ec2User1InitialPassword
   Ec2User2SecretArn:
     Value: !Ref Ec2User2InitialPassword
-  ObserverBoundaryArn:
-    Value: !Ref ObserverBoundary
+
+  # ---- Outside parties, audit, cost ----------------------------------------
+  ExternalAuditorRoleName:
+    Value: !Ref ExternalAuditorRole
   ExternalAuditorRoleArn:
     Value: !GetAtt ExternalAuditorRole.Arn
   MonthlyBudgetName:
@@ -455,3 +487,6 @@ Outputs:
   AuditTrailName:
     Condition: MakeTrail
     Value: !Ref AuditTrail
+  AuditBucketName:
+    Condition: MakeTrail
+    Value: !Ref AuditBucket

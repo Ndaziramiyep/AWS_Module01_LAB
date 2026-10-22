@@ -16,7 +16,7 @@ I built Onward Logistics' engineer onboarding as code. Every user, group, guardr
 | Secure first login, no shared plain-text credential, forced change at first sign-in | Secrets Manager generates a 20-character password per user. CloudFormation reads it with a dynamic reference, so it never appears in Git. `PasswordResetRequired: true`. No access keys are created. | §7 |
 | On-call engineer can **never** create or terminate compute, even if permissions are loosened later | `onward-prod-boundary-compute-observer` allows only read actions and explicitly denies run, start, terminate and Auto Scaling changes. It also denies removing the boundary. Effective access is policies ∩ boundary, so anything added later cannot exceed it. | §2: AdministratorAccess is attached to the group *and* the user, and the actions are still denied |
 | Repeatable and auditable: every change traced to a person and a time | (a) Git history shows who changed the definition and when. (b) A multi-Region CloudTrail trail with global service events and log file validation records who changed access in AWS. Logs go to an encrypted, versioned, non-public bucket that is retained on stack deletion and that storage engineers are explicitly denied. | §4, §5 |
-| Prove it to the Head of Security | `verify-access.sh` produces a single evidence report | Whole script, with output saved in `evidence/` |
+| Prove it to the Head of Security | `verify-access.sh` produces a single evidence report | Whole script, with output saved in `evidence/` and summarised in `evidence/Evidence-Report-Template.md` |
 | *Week 1:* people outside the company get only temporary, limited access | No IAM users for outsiders. `onward-prod-external-auditor` is a role with a 1-hour maximum session and an External ID condition, using the AWS managed `SecurityAudit` policy and capped by a read-only boundary that denies data and secret reads. | §8 |
 | *Week 1:* spend is visible from day one | `onward-prod-monthly-cost` budget emails the owner at 80% of actual spend and 100% of forecast spend | §9 |
 | Everything provisioned with CloudFormation, deployed with Git sync | `templates/onboarding.yaml` + `onboarding-deployment.yaml` (Git sync deployment file). The bootstrap roles and connection are also CloudFormation. | §10 |
@@ -73,6 +73,7 @@ flowchart LR
 | `git-sync/connection-and-roles.yaml` | One-time bootstrap: Git connection, the role Git sync uses, the service role the stack deploys with |
 | `verify-access.sh` | Evidence script for the Head of Security |
 | `evidence/` | Saved output of `verify-access.sh` |
+| `evidence/Evidence-Report-Template.md` | Report for the Head of Security: expected result and pass/fail for each script section |
 | `Discovery-Report-Template.md` | Stage 1 discovery report |
 | `Privillages-Architecture.md` | How access is shared between users, groups and permission boundaries, with the access matrix |
 
@@ -84,7 +85,7 @@ Prerequisites: AWS CLI v2, admin credentials for the target account (outside thi
 
 1. **Bootstrap (once per account).** This creates the connection and the deploy roles.
    ```bash
-   aws cloudformation deploy --region us-east-1 \
+   aws cloudformation deploy --region eu-west-1 \
      --template-file git-sync/connection-and-roles.yaml \
      --stack-name onward-gitsync-bootstrap --capabilities CAPABILITY_NAMED_IAM \
      --tags Project=onward "Owner=Patrick Ndaziramiye" Environment=prod
@@ -97,6 +98,15 @@ Prerequisites: AWS CLI v2, admin credentials for the target account (outside thi
    ```bash
    mkdir -p evidence && ./verify-access.sh | tee evidence/verify-access-$(date +%Y%m%d).txt
    ```
+   The script takes every name from the stack outputs of `templates/onboarding.yaml` and `git-sync/connection-and-roles.yaml`, so it always checks what Git defines. Section 10 confirms the onboarding stack is wired to the bootstrap: the connection is available, Git sync uses `onward-gitsync-role`, and the stack deploys with `onward-onboarding-stack-role`. Fill in `evidence/Evidence-Report-Template.md` from the output.
+
+**How the three files connect**
+
+| File | Provides | Used by |
+|---|---|---|
+| `git-sync/connection-and-roles.yaml` | Outputs `ConnectionArn`, `GitSyncRoleArn`, `StackDeployRoleArn` | Git sync stack set-up (step 3), `verify-access.sh` §10 |
+| `templates/onboarding.yaml` | Outputs every user, group, boundary, secret ARN, role, bucket and budget name | `verify-access.sh` §1–§9 |
+| `verify-access.sh` | Evidence that the deployed account matches both templates | `evidence/` report |
 
 From then on, onboarding a new engineer or changing access means editing the template and merging to `main`. Git sync applies the change.
 
@@ -106,7 +116,7 @@ From then on, onboarding a new engineer or changing access means editing the tem
 
 ## Region
 
-**Choice: `us-east-1` (N. Virginia).** IAM is a global service, and its API events are delivered in us-east-1, so keeping the stack, the trail's home Region and the evidence queries there keeps audit lookups in one place. CloudFormation Git sync and every service used here are available there, and it is among the lowest-cost Regions. This lab stores no customer or merchant data, so data-residency rules for West African markets are not affected. When later labs host customer data, I will choose the Region by latency and data-protection law. `af-south-1` (Cape Town) is the likely candidate.
+**Choice: `eu-west-1` (Ireland).** Both stacks, the trail's home Region, the audit bucket and the first-login secrets live there. CloudFormation Git sync and every service used here are available in eu-west-1, and it is a mature, lower-cost Region with good latency to West Africa. Every command in `verify-access.sh` runs against eu-west-1. IAM is a global service; the multi-Region trail includes global service events, so IAM changes are written to the audit bucket in eu-west-1. This lab stores no customer or merchant data, so data-residency rules for West African markets are not affected. When later labs host customer data, I will choose the Region by latency and data-protection law. `af-south-1` (Cape Town) is the likely candidate.
 
 ---
 
