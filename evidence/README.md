@@ -1,12 +1,12 @@
 # Evidence
 
-Saved output of `verify-access.sh`, run as an admin after each deployment:
+Saved output of `verify-access.sh` (repo root), run as an admin in eu-west-1 after each deployment:
 
 ```bash
 ./verify-access.sh | tee evidence/verify-access-$(date +%Y%m%d).txt
 ```
 
-Then copy [Evidence-Report-Template.md](Evidence-Report-Template.md) to `Evidence-Report-YYYYMMDD.md` and fill it in from that output. It lists the expected result for each of the ten sections, so the Head of Security can see at a glance what passed.
+Then copy [Evidence-Report-Template.md](Evidence-Report-Template.md) to `Evidence-Report-YYYYMMDD.md` and fill it in from that output. It lists the expected result for each of the eight sections, so the Head of Security can see at a glance what passed.
 
 | File | What it is |
 |---|---|

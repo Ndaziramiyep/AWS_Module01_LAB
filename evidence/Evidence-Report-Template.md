@@ -4,8 +4,9 @@
 |---|---|
 | **Prepared for** | Head of Security, Onward Logistics |
 | **Prepared by** | _name_ |
-| **Run date (UTC)** | _from the first line of the script output_ |
-| **AWS account / environment** | _account ID_ / _prod_ |
+| **Run date (UTC)** | _from the first lines of the script output_ |
+| **AWS account / Region** | _account ID_ / eu-west-1 |
+| **Environment / stack** | _prod_ / _stack name_ |
 | **Git commit deployed** | _`git rev-parse --short HEAD`_ |
 | **Raw output file** | `evidence/verify-access-YYYYMMDD.txt` |
 
@@ -16,14 +17,14 @@
 ## How to produce this report
 
 1. Sign in to the AWS CLI with **admin** credentials for the target account (region `eu-west-1`, used by every section of the script).
-2. From the repository root, run:
+2. From the repository root, in Git Bash, run:
    ```bash
    mkdir -p evidence
    ./verify-access.sh | tee evidence/verify-access-$(date +%Y%m%d).txt
    ```
-   The script reads every name from the stack outputs, so nothing needs editing. It finds the onboarding stack by itself. To point it elsewhere: `STACK=<name> BOOTSTRAP_STACK=<name> ./verify-access.sh ...`
+   The script reads every name from the stack outputs of `templates/onboarding.yaml` and `git-sync/connection-and-roles.yaml`, so nothing needs editing. To point it at other stacks: `STACK=<name> BOOTSTRAP_STACK=<name> ./verify-access.sh ...`
 3. Copy this file to `evidence/Evidence-Report-YYYYMMDD.md`.
-4. For each section below, paste the matching block of output, then tick **Pass** or **Fail** against the expected result.
+4. For each section below, paste the matching block of output, then tick **Pass** or **Fail** against the expected result. Lines starting `PASS` / `FAIL` are already judged by the script.
 5. If section 4 is empty, CloudTrail has not caught up yet. Wait five minutes and rerun only that command.
 
 **Reading simulator results:** `allowed` = permitted. `implicitDeny` = never granted. `explicitDeny` = blocked by a deny statement in the permission boundary, which **no other policy can override**.
@@ -41,9 +42,7 @@
 | 5 | Boundaries | Every engineer is capped by the boundary defined in Git | ☐ Pass ☐ Fail |
 | 6 | No inline policies | Access comes only from reviewed, reusable policies | ☐ Pass ☐ Fail |
 | 7 | Secure first login | Generated password, forced reset, no access keys | ☐ Pass ☐ Fail |
-| 8 | Outside parties | Temporary, read-only role, External ID required | ☐ Pass ☐ Fail |
-| 9 | Cost visibility | Budget alerts active from day one | ☐ Pass ☐ Fail |
-| 10 | Deployed from Git | The live stack is driven by CloudFormation Git sync | ☐ Pass ☐ Fail |
+| 8 | Deployed from Git | The live stack is driven by CloudFormation Git sync | ☐ Pass ☐ Fail |
 
 **Overall:** ☐ All controls pass ☐ Exceptions listed in [Findings](#findings-and-follow-up)
 
@@ -55,9 +54,7 @@
 
 | User | Action | Expected |
 |---|---|---|
-| s3-user | `s3:ListAllMyBuckets` | allowed |
-| s3-user | `s3:PutObject`, `s3:GetObject` on a normal bucket | allowed |
-| s3-user | `s3:PutObject`, `s3:DeleteObject` on the audit log bucket | explicitDeny |
+| s3-user | `s3:ListAllMyBuckets`, `s3:PutObject` | allowed |
 | s3-user | `ec2:RunInstances`, `ec2:DescribeInstances` | implicitDeny |
 | ec2-user-1 | `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances` | allowed |
 | ec2-user-1 | `s3:PutObject` | implicitDeny |
@@ -98,7 +95,7 @@
 
 **Proves:** the test leaves no extra access behind. The script also removes AdministratorAccess automatically if it stops early for any reason.
 
-**Expected:** the two lists show only `AmazonEC2ReadOnlyAccess` / `IAMUserChangePassword` for the group and nothing for the user. `AdministratorAccess` does **not** appear.
+**Expected:** the group shows only `AmazonEC2ReadOnlyAccess` and `IAMUserChangePassword`; the user shows nothing. `AdministratorAccess` does **not** appear.
 
 ```text
 <paste section 3 output>
@@ -112,7 +109,7 @@
 
 **Proves:** CloudTrail recorded the stress test with a named person and a timestamp.
 
-**Expected:** `AttachGroupPolicy`, `AttachUserPolicy`, `DetachGroupPolicy` and `DetachUserPolicy` each show an entry at the run time, under the admin who ran the script. `CreateUser` shows the CloudFormation deployment that created the engineers.
+**Expected:** `AttachGroupPolicy`, `AttachUserPolicy`, `DetachGroupPolicy` and `DetachUserPolicy` each show an entry at the run time, under the admin who ran the script. `CreateUser` shows the CloudFormation deployment that created the engineers. If event history in eu-west-1 is empty, the same events are in the log files in the audit bucket (`AuditBucketName` stack output).
 
 ```text
 <paste section 4 output>
@@ -131,7 +128,7 @@
 
 ## 5. Permission boundaries attached as defined in Git
 
-**Expected:**
+**Expected:** three `PASS` lines. The script compares each user's boundary with the stack output.
 
 | User | Boundary ARN ends with |
 |---|---|
@@ -151,7 +148,7 @@
 
 **Proves:** all access comes from AWS managed policies and reviewed boundaries, never from one-off policies hidden on a single user or group.
 
-**Expected:** every count is `0` (three users, three groups).
+**Expected:** six `PASS` lines (three users, three groups), each with count `0`.
 
 ```text
 <paste section 6 output>
@@ -167,7 +164,7 @@
 
 **Expected, for each of the three users:**
 - `PasswordResetRequired` is `True` (until the engineer has signed in and changed it, after which AWS shows `False`. Note which applies.)
-- `access keys: 0`
+- `PASS  access keys for <user>: 0`
 - A secret named `onward/<env>/onboarding/<user>` exists. Only its name and creation date are printed.
 
 ```text
@@ -178,47 +175,9 @@
 
 ---
 
-## 8. Outside parties: temporary, read-only role
+## 8. Deployed by CloudFormation Git sync, wired to the bootstrap
 
-**Proves:** outsiders never get a user account, only a short-lived role they cannot widen.
-
-| Check | Expected |
-|---|---|
-| Max session duration | `3600` (one hour) |
-| Permission boundary | `policy/onward-<env>-boundary-external-auditor` |
-| Trust policy condition | `sts:ExternalId` required |
-| `cloudtrail:LookupEvents`, `iam:ListUsers`, `ec2:DescribeInstances` | allowed |
-| `s3:GetObject`, `secretsmanager:GetSecretValue` | explicitDeny |
-| `ec2:RunInstances`, `iam:CreateUser` | implicitDeny |
-
-```text
-<paste section 8 output>
-```
-
-☐ Pass ☐ Fail. Notes:
-
----
-
-## 9. Spend visible from day one
-
-| Check | Expected |
-|---|---|
-| Budget | `onward-<env>-monthly-cost`, `MONTHLY`, limit matches `MonthlyBudgetUsd` in `onboarding-deployment.yaml` |
-| Alert 1 | `ACTUAL` / `GREATER_THAN` / `80` |
-| Alert 2 | `FORECASTED` / `GREATER_THAN` / `100` |
-| Email subscription | Confirmed in the inbox of `BudgetAlertEmail` (check manually) |
-
-```text
-<paste section 9 output>
-```
-
-☐ Pass ☐ Fail. Notes:
-
----
-
-## 10. Deployed by CloudFormation Git sync, wired to the bootstrap
-
-**Proves:** the live stack comes from this repository through the reviewed pipeline, not from someone's laptop. The script compares the onboarding stack with the outputs of the bootstrap stack (`onward-gitsync-bootstrap`) and prints `PASS` or `FAIL` for each line.
+**Proves:** the live stack comes from this repository through the reviewed pipeline, not from someone's laptop. The script compares the onboarding stack with the outputs of the bootstrap stack `onward-gitsync-bootstrap` (from `git-sync/connection-and-roles.yaml`).
 
 | Check | Expected |
 |---|---|
@@ -230,7 +189,7 @@
 | Git sync deployment file | `PASS` (`onboarding-deployment.yaml`) |
 
 ```text
-<paste section 10 output>
+<paste section 8 output>
 ```
 
 ☐ Pass ☐ Fail. Notes:
