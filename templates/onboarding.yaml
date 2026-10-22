@@ -356,9 +356,9 @@ Outputs:
     Description: Where new engineers sign in for the first time.
     Value: !Sub https://${AWS::AccountId}.signin.aws.amazon.com/console
 
-  S3UserName:
-    Description: Storage engineer user.
-    Value: !Ref S3User
+  # S3UserName:
+  #   Description: Storage engineer user.
+  #   Value: !Ref S3User
   Ec2User1Name:
     Description: Compute engineer user.
     Value: !Ref Ec2User1
@@ -386,9 +386,9 @@ Outputs:
     Description: Boundary expected on ec2-user-2.
     Value: !Ref ObserverBoundary
 
-  S3UserSecretArn:
-    Description: Secret holding s3-user's first-login password.
-    Value: !Ref S3UserInitialPassword
+  # S3UserSecretArn:
+  #   Description: Secret holding s3-user's first-login password.
+  #   Value: !Ref S3UserInitialPassword
   Ec2User1SecretArn:
     Description: Secret holding ec2-user-1's first-login password.
     Value: !Ref Ec2User1InitialPassword
