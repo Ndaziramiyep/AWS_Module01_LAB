@@ -230,17 +230,17 @@ Resources:
   # ==========================================================================
 
   # Storage engineer: StorageEngineersGroup, capped by StorageBoundary.
-  S3User:
-    Type: AWS::IAM::User
-    Properties:
-      UserName: s3-user
-      Groups: [!Ref StorageEngineersGroup]
-      PermissionsBoundary: !Ref StorageBoundary
-      LoginProfile:
-        Password: !Sub '{{resolve:secretsmanager:${S3UserInitialPassword}:SecretString:password}}'
-        PasswordResetRequired: true
-      Tags:
-        - {Key: Role, Value: storage-engineer}
+  # S3User:
+  #   Type: AWS::IAM::User
+  #   Properties:
+  #     UserName: s3-user
+  #     Groups: [!Ref StorageEngineersGroup]
+  #     PermissionsBoundary: !Ref StorageBoundary
+  #     LoginProfile:
+  #       Password: !Sub '{{resolve:secretsmanager:${S3UserInitialPassword}:SecretString:password}}'
+  #       PasswordResetRequired: true
+  #     Tags:
+  #       - {Key: Role, Value: storage-engineer}
 
   # Compute engineer: ComputeEngineersGroup, capped by ComputeBoundary.
   Ec2User1:
