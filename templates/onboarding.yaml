@@ -213,17 +213,17 @@ Resources:
         ExcludeCharacters: '"@/\''`'
 
   # First-login password for ec2-user-2, stored at onward/<env>/onboarding/ec2-user-2.
-  Ec2User2InitialPassword:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub onward/${Environment}/onboarding/ec2-user-2
-      Description: First-login password for ec2-user-2 (forced reset on sign-in)
-      GenerateSecretString:
-        SecretStringTemplate: '{"username":"ec2-user-2"}'
-        GenerateStringKey: password
-        PasswordLength: 20
-        RequireEachIncludedType: true
-        ExcludeCharacters: '"@/\''`'
+  # Ec2User2InitialPassword:
+  #   Type: AWS::SecretsManager::Secret
+  #   Properties:
+  #     Name: !Sub onward/${Environment}/onboarding/ec2-user-2
+  #     Description: First-login password for ec2-user-2 (forced reset on sign-in)
+  #     GenerateSecretString:
+  #       SecretStringTemplate: '{"username":"ec2-user-2"}'
+  #       GenerateStringKey: password
+  #       PasswordLength: 20
+  #       RequireEachIncludedType: true
+  #       ExcludeCharacters: '"@/\''`'
 
   # ==========================================================================
   # 4. USERS - group membership + boundary + forced password reset.
@@ -256,17 +256,17 @@ Resources:
         - {Key: Role, Value: compute-engineer}
 
   # On-call engineer: OnCallObserversGroup, capped by ObserverBoundary.
-  Ec2User2:
-    Type: AWS::IAM::User
-    Properties:
-      UserName: ec2-user-2
-      Groups: [!Ref OnCallObserversGroup]
-      PermissionsBoundary: !Ref ObserverBoundary
-      LoginProfile:
-        Password: !Sub '{{resolve:secretsmanager:${Ec2User2InitialPassword}:SecretString:password}}'
-        PasswordResetRequired: true
-      Tags:
-        - {Key: Role, Value: oncall-observer}
+  # Ec2User2:
+  #   Type: AWS::IAM::User
+  #   Properties:
+  #     UserName: ec2-user-2
+  #     Groups: [!Ref OnCallObserversGroup]
+  #     PermissionsBoundary: !Ref ObserverBoundary
+  #     LoginProfile:
+  #       Password: !Sub '{{resolve:secretsmanager:${Ec2User2InitialPassword}:SecretString:password}}'
+  #       PasswordResetRequired: true
+  #     Tags:
+  #       - {Key: Role, Value: oncall-observer}
 
   # ==========================================================================
   # 5. AUDIT TRAIL - who changed access, and when. IAM is a global service,
@@ -362,9 +362,9 @@ Outputs:
   Ec2User1Name:
     Description: Compute engineer user.
     Value: !Ref Ec2User1
-  Ec2User2Name:
-    Description: On-call (observe-only) engineer user.
-    Value: !Ref Ec2User2
+  # Ec2User2Name:
+  #   Description: On-call (observe-only) engineer user.
+  #   Value: !Ref Ec2User2
 
   StorageEngineersGroupName:
     Description: Group for storage engineers.
@@ -392,9 +392,9 @@ Outputs:
   Ec2User1SecretArn:
     Description: Secret holding ec2-user-1's first-login password.
     Value: !Ref Ec2User1InitialPassword
-  Ec2User2SecretArn:
-    Description: Secret holding ec2-user-2's first-login password.
-    Value: !Ref Ec2User2InitialPassword
+  # Ec2User2SecretArn:
+  #   Description: Secret holding ec2-user-2's first-login password.
+  #   Value: !Ref Ec2User2InitialPassword
 
   AuditTrailName:
     Condition: MakeTrail
