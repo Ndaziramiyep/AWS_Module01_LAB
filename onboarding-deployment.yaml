@@ -1,13 +1,12 @@
+# onboarding-deployment.yaml - Git sync deployment file.
+# Git sync watches the main branch and deploys the template below, with these
+# parameters and stack tags, using the roles from git-sync/connection-and-roles.yaml.
+# Change access by editing templates/onboarding.yaml and merging to main.
 template-file-path: templates/onboarding.yaml
 parameters:
-  Environment: prod
-  CreateAuditTrail: 'true'
-  BudgetAlertEmail: patrick.ndaziramiye@amalitech.com
-  MonthlyBudgetUsd: '20'
-  ExternalAuditorAccountId: ''
-  ExternalAuditorExternalId: onward-prod-external-audit
-tags:
-  Project: onward
-  Owner: Patrick Ndaziramiye
-  Environment: prod
+  Environment: prod          # prefix: onward-prod-...
+  CreateAuditTrail: 'true'   # false if the account already has a trail
+tags:                        # copied to every resource that supports tags
+  Project: secure-onboarding
+  Owner: platform-security
   ManagedBy: cloudformation-gitsync

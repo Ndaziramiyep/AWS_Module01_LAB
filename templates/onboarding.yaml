@@ -1,48 +1,41 @@
+# ============================================================================
+# templates/onboarding.yaml
+#
+# What:   Every engineer onboarded at Onward Logistics: permission boundaries,
+#         job-function groups, generated first-login passwords, IAM users and
+#         the CloudTrail audit trail. No inline IAM policies.
+# Deploy: Never by hand. CloudFormation Git sync reads onboarding-deployment.yaml
+#         (repo root), which points here, and deploys with the service role
+#         onward-onboarding-stack-role from git-sync/connection-and-roles.yaml.
+# Region: eu-west-1
+# Proof:  verify-access.sh reads the Outputs at the bottom of this file;
+#         results go in evidence/Evidence-Report-Template.md.
+# ============================================================================
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   Onward Logistics - repeatable, auditable engineer onboarding.
   Groups carry AWS managed job policies, permission boundaries cap every
   engineer, Secrets Manager generates first-login passwords, CloudTrail
-  records every access change, outside parties get temporary role access
-  only, and a budget makes spend visible from day one. No inline IAM policies.
+  records every access change. No inline IAM policies.
+  Deployed by Git sync from onboarding-deployment.yaml.
 
 Parameters:
+  # Prefix for every name (onward-<Environment>-...). Set in onboarding-deployment.yaml.
   Environment:
     Type: String
     Default: prod
     AllowedPattern: '[a-z0-9-]+'
+    Description: Environment name used in every resource name, e.g. prod.
+  # Lets the stack reuse an existing organisation/account trail instead.
   CreateAuditTrail:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'true'
     Description: Set to false if the account already has an org/account trail.
-  BudgetAlertEmail:
-    Type: String
-    AllowedPattern: '[^@\s]+@[^@\s]+\.[^@\s]+'
-    Description: Who is emailed when spend approaches the monthly budget.
-  MonthlyBudgetUsd:
-    Type: Number
-    Default: 20
-    MinValue: 1
-    Description: Monthly cost ceiling for this account, in USD.
-  ExternalAuditorAccountId:
-    Type: String
-    Default: ''
-    AllowedPattern: '(\d{12})?'
-    Description: >-
-      AWS account of the outside party (e.g. external auditor). Leave empty to
-      trust this account, so the role can be demonstrated without a partner.
-  ExternalAuditorExternalId:
-    Type: String
-    MinLength: 8
-    Default: onward-prod-external-audit
-    Description: >-
-      External ID the outside party must present (confused-deputy protection).
-      AWS treats this as an identifier, not a secret.
 
 Conditions:
+  # True when this stack should create its own audit bucket and trail.
   MakeTrail: !Equals [!Ref CreateAuditTrail, 'true']
-  HasExternalAccount: !Not [!Equals [!Ref ExternalAuditorAccountId, '']]
 
 Resources:
 
@@ -52,6 +45,7 @@ Resources:
   #    (boundary). Anything outside the boundary can never be granted.
   # ==========================================================================
 
+  # Ceiling for storage engineers (s3-user): S3 plus own-password self-service.
   StorageBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -72,18 +66,9 @@ Resources:
             Effect: Allow
             Action: iam:GetAccountPasswordPolicy
             Resource: '*'
-          # s3:* above would otherwise include the audit log bucket. Storage
-          # engineers must never be able to edit or delete audit evidence.
-          - !If
-            - MakeTrail
-            - Sid: NeverTouchAuditEvidence
-              Effect: Deny
-              Action: 's3:*'
-              Resource:
-                - !GetAtt AuditBucket.Arn
-                - !Sub '${AuditBucket.Arn}/*'
-            - !Ref AWS::NoValue
 
+  # Ceiling for compute engineers (ec2-user-1): EC2, load balancers, Auto
+  # Scaling and read-only CloudWatch, plus own-password self-service.
   ComputeBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -111,12 +96,14 @@ Resources:
             Action: iam:GetAccountPasswordPolicy
             Resource: '*'
 
+  # Ceiling for on-call engineers (ec2-user-2): look, never change. Holds even
+  # if AdministratorAccess is attached later (verify-access.sh section 2).
   ObserverBoundary:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       ManagedPolicyName: !Sub onward-${Environment}-boundary-compute-observer
       Description: >-
-        Hard ceiling for on-call engineers. Read-only compute visibility only;
+        Hard ceiling for on-call engineers. Read-only compute visibility;
         creating, starting or terminating compute is explicitly denied.
       PolicyDocument:
         Version: '2012-10-17'
@@ -166,6 +153,7 @@ Resources:
   # 2. GROUPS - job functions, built from AWS managed policies only.
   # ==========================================================================
 
+  # Storage job: full S3 (capped by StorageBoundary) and change own password.
   StorageEngineersGroup:
     Type: AWS::IAM::Group
     Properties:
@@ -174,6 +162,7 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonS3FullAccess
         - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
 
+  # Compute job: full EC2 (capped by ComputeBoundary) and change own password.
   ComputeEngineersGroup:
     Type: AWS::IAM::Group
     Properties:
@@ -182,6 +171,8 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonEC2FullAccess
         - !Sub arn:${AWS::Partition}:iam::aws:policy/IAMUserChangePassword
 
+  # On-call job: read-only EC2 and change own password. verify-access.sh
+  # attaches AdministratorAccess here temporarily to prove the boundary holds.
   OnCallObserversGroup:
     Type: AWS::IAM::Group
     Properties:
@@ -195,6 +186,7 @@ Resources:
   #    stored in Git. Delivered to the hire out-of-band by an admin.
   # ==========================================================================
 
+  # First-login password for s3-user, stored at onward/<env>/onboarding/s3-user.
   S3UserInitialPassword:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -207,6 +199,7 @@ Resources:
         RequireEachIncludedType: true
         ExcludeCharacters: '"@/\''`'
 
+  # First-login password for ec2-user-1, stored at onward/<env>/onboarding/ec2-user-1.
   Ec2User1InitialPassword:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -219,6 +212,7 @@ Resources:
         RequireEachIncludedType: true
         ExcludeCharacters: '"@/\''`'
 
+  # First-login password for ec2-user-2, stored at onward/<env>/onboarding/ec2-user-2.
   Ec2User2InitialPassword:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -235,6 +229,7 @@ Resources:
   # 4. USERS - group membership + boundary + forced password reset.
   # ==========================================================================
 
+  # Storage engineer: StorageEngineersGroup, capped by StorageBoundary.
   S3User:
     Type: AWS::IAM::User
     Properties:
@@ -247,6 +242,7 @@ Resources:
       Tags:
         - {Key: Role, Value: storage-engineer}
 
+  # Compute engineer: ComputeEngineersGroup, capped by ComputeBoundary.
   Ec2User1:
     Type: AWS::IAM::User
     Properties:
@@ -259,6 +255,7 @@ Resources:
       Tags:
         - {Key: Role, Value: compute-engineer}
 
+  # On-call engineer: OnCallObserversGroup, capped by ObserverBoundary.
   Ec2User2:
     Type: AWS::IAM::User
     Properties:
@@ -276,6 +273,8 @@ Resources:
   #    so global service events must be included.
   # ==========================================================================
 
+  # Encrypted, versioned, private bucket for CloudTrail logs. Kept when the
+  # stack is deleted, because it is audit evidence.
   AuditBucket:
     Type: AWS::S3::Bucket
     Condition: MakeTrail
@@ -295,6 +294,7 @@ Resources:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
 
+  # Lets only this account's trail write to AuditBucket, and only over HTTPS.
   # Resource-based policy (required by CloudTrail), not an IAM inline policy.
   AuditBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -330,6 +330,8 @@ Resources:
             Condition:
               Bool: {aws:SecureTransport: 'false'}
 
+  # Multi-Region trail with IAM (global) events and tamper-evident log files.
+  # verify-access.sh section 4 reads who changed access from its history.
   AuditTrail:
     Type: AWS::CloudTrail::Trail
     Condition: MakeTrail
@@ -342,151 +344,63 @@ Resources:
       IncludeGlobalServiceEvents: true
       EnableLogFileValidation: true
 
-  # ==========================================================================
-  # 6. OUTSIDE PARTIES - temporary, limited access only. No IAM user, no
-  #    password, no access key: they assume a role and get credentials that
-  #    expire after one hour. The boundary keeps the role read-only even if
-  #    someone attaches a broader policy to it later.
-  # ==========================================================================
-
-  ExternalAuditorBoundary:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub onward-${Environment}-boundary-external-auditor
-      Description: Ceiling for outside parties - read configuration and audit history, never data.
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: ReviewConfigurationAndHistory
-            Effect: Allow
-            Action:
-              - 'cloudtrail:Describe*'
-              - 'cloudtrail:Get*'
-              - 'cloudtrail:List*'
-              - cloudtrail:LookupEvents
-              - 'iam:Get*'
-              - 'iam:List*'
-              - iam:GenerateCredentialReport
-              - 'ec2:Describe*'
-              - 'cloudformation:Describe*'
-              - 'cloudformation:List*'
-              - cloudformation:GetTemplate
-              - 's3:GetBucket*'
-              - s3:ListAllMyBuckets
-            Resource: '*'
-          - Sid: NeverReadDataOrSecrets
-            Effect: Deny
-            Action:
-              - 's3:GetObject*'
-              - secretsmanager:GetSecretValue
-            Resource: '*'
-
-  ExternalAuditorRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub onward-${Environment}-external-auditor
-      Description: Temporary, read-only access for people outside Onward Logistics.
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !If
-                - HasExternalAccount
-                - !Sub 'arn:${AWS::Partition}:iam::${ExternalAuditorAccountId}:root'
-                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
-            Action: sts:AssumeRole
-            Condition:
-              StringEquals:
-                sts:ExternalId: !Ref ExternalAuditorExternalId
-      ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/SecurityAudit
-      PermissionsBoundary: !Ref ExternalAuditorBoundary
-      Tags:
-        - {Key: Role, Value: external-auditor}
-
-  # ==========================================================================
-  # 7. COST VISIBILITY - spend is visible from day one; the owner is emailed
-  #    before the month's budget is used up, not after.
-  # ==========================================================================
-
-  MonthlyCostBudget:
-    Type: AWS::Budgets::Budget
-    Properties:
-      Budget:
-        BudgetName: !Sub onward-${Environment}-monthly-cost
-        BudgetType: COST
-        TimeUnit: MONTHLY
-        BudgetLimit:
-          Amount: !Ref MonthlyBudgetUsd
-          Unit: USD
-      NotificationsWithSubscribers:
-        - Notification:
-            NotificationType: ACTUAL
-            ComparisonOperator: GREATER_THAN
-            Threshold: 80
-            ThresholdType: PERCENTAGE
-          Subscribers:
-            - {SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail}
-        - Notification:
-            NotificationType: FORECASTED
-            ComparisonOperator: GREATER_THAN
-            Threshold: 100
-            ThresholdType: PERCENTAGE
-          Subscribers:
-            - {SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail}
-
-# verify-access.sh reads these outputs instead of guessing names, so renaming
-# a resource here keeps the evidence script pointed at the right thing.
+# ============================================================================
+# OUTPUTS - read by verify-access.sh, so the evidence script follows any
+# rename made here. Secret outputs are ARNs only, never password values.
+# ============================================================================
 Outputs:
   Environment:
+    Description: Environment prefix used in every resource name.
     Value: !Ref Environment
   ConsoleSignInUrl:
+    Description: Where new engineers sign in for the first time.
     Value: !Sub https://${AWS::AccountId}.signin.aws.amazon.com/console
 
-  # ---- Users and groups ----------------------------------------------------
   S3UserName:
+    Description: Storage engineer user.
     Value: !Ref S3User
   Ec2User1Name:
+    Description: Compute engineer user.
     Value: !Ref Ec2User1
   Ec2User2Name:
+    Description: On-call (observe-only) engineer user.
     Value: !Ref Ec2User2
+
   StorageEngineersGroupName:
+    Description: Group for storage engineers.
     Value: !Ref StorageEngineersGroup
   ComputeEngineersGroupName:
+    Description: Group for compute engineers.
     Value: !Ref ComputeEngineersGroup
   OnCallObserversGroupName:
+    Description: Group for on-call engineers (used by the stress test).
     Value: !Ref OnCallObserversGroup
 
-  # ---- Boundaries ----------------------------------------------------------
   StorageBoundaryArn:
+    Description: Boundary expected on s3-user.
     Value: !Ref StorageBoundary
   ComputeBoundaryArn:
+    Description: Boundary expected on ec2-user-1.
     Value: !Ref ComputeBoundary
   ObserverBoundaryArn:
+    Description: Boundary expected on ec2-user-2.
     Value: !Ref ObserverBoundary
-  ExternalAuditorBoundaryArn:
-    Value: !Ref ExternalAuditorBoundary
 
-  # ---- First-login secrets (ARNs only, never values) -----------------------
   S3UserSecretArn:
+    Description: Secret holding s3-user's first-login password.
     Value: !Ref S3UserInitialPassword
   Ec2User1SecretArn:
+    Description: Secret holding ec2-user-1's first-login password.
     Value: !Ref Ec2User1InitialPassword
   Ec2User2SecretArn:
+    Description: Secret holding ec2-user-2's first-login password.
     Value: !Ref Ec2User2InitialPassword
 
-  # ---- Outside parties, audit, cost ----------------------------------------
-  ExternalAuditorRoleName:
-    Value: !Ref ExternalAuditorRole
-  ExternalAuditorRoleArn:
-    Value: !GetAtt ExternalAuditorRole.Arn
-  MonthlyBudgetName:
-    Value: !Ref MonthlyCostBudget
   AuditTrailName:
     Condition: MakeTrail
+    Description: CloudTrail trail recording every access change.
     Value: !Ref AuditTrail
   AuditBucketName:
     Condition: MakeTrail
+    Description: Bucket holding the CloudTrail log files.
     Value: !Ref AuditBucket
